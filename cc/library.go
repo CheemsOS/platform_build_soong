@@ -1004,8 +1004,9 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 }
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
+	// The logic must be consistent with classifySourceAbiDump.
 	isNdk := ctx.isNdk()
-	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || ctx.isVndk()
+	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || (ctx.useVndk() && ctx.isVndk())
 
 	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, false)
 	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, true)
@@ -1317,7 +1318,7 @@ var charsNotForMacro = regexp.MustCompile("[^a-zA-Z0-9_]+")
 
 func versioningMacroName(moduleName string) string {
 	macroName := charsNotForMacro.ReplaceAllString(moduleName, "_")
-	macroName = strings.ToUpper(moduleName)
+	macroName = strings.ToUpper(macroName)
 	return "__" + macroName + "_API__"
 }
 
@@ -1454,17 +1455,34 @@ func LatestStubsVersionFor(config android.Config, name string) string {
 	return ""
 }
 
-func checkVersions(ctx android.BaseModuleContext, versions []string) {
+func normalizeVersions(ctx android.BaseModuleContext, versions []string) {
 	numVersions := make([]int, len(versions))
 	for i, v := range versions {
-		numVer, err := strconv.Atoi(v)
+		numVer, err := android.ApiStrToNum(ctx, v)
 		if err != nil {
-			ctx.PropertyErrorf("versions", "%q is not a number", v)
+			ctx.PropertyErrorf("versions", "%s", err.Error())
+			return
 		}
 		numVersions[i] = numVer
 	}
 	if !sort.IsSorted(sort.IntSlice(numVersions)) {
 		ctx.PropertyErrorf("versions", "not sorted: %v", versions)
+	}
+	for i, v := range numVersions {
+		versions[i] = strconv.Itoa(v)
+	}
+}
+
+func createVersionVariations(mctx android.BottomUpMutatorContext, versions []string) {
+	// "" is for the non-stubs variant
+	versions = append([]string{""}, versions...)
+
+	modules := mctx.CreateVariations(versions...)
+	for i, m := range modules {
+		if versions[i] != "" {
+			m.(LinkableInterface).SetBuildStubs()
+			m.(LinkableInterface).SetStubsVersions(versions[i])
+		}
 	}
 }
 
@@ -1474,29 +1492,35 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 	if library, ok := mctx.Module().(LinkableInterface); ok && !library.InRecovery() {
 		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 {
 			versions := library.StubsVersions()
-			checkVersions(mctx, versions)
+			normalizeVersions(mctx, versions)
 			if mctx.Failed() {
 				return
 			}
 
-			// save the list of versions for later use
 			stubsVersionsLock.Lock()
 			defer stubsVersionsLock.Unlock()
+			// save the list of versions for later use
 			stubsVersionsFor(mctx.Config())[mctx.ModuleName()] = versions
 
-			// "" is for the non-stubs variant
-			versions = append([]string{""}, versions...)
-
-			modules := mctx.CreateVariations(versions...)
-			for i, m := range modules {
-				if versions[i] != "" {
-					m.(LinkableInterface).SetBuildStubs()
-					m.(LinkableInterface).SetStubsVersions(versions[i])
-				}
-			}
-		} else {
-			mctx.CreateVariations("")
+			createVersionVariations(mctx, versions)
+			return
 		}
+
+		if c, ok := library.(*Module); ok && c.IsStubs() {
+			stubsVersionsLock.Lock()
+			defer stubsVersionsLock.Unlock()
+			// For LLNDK llndk_library, we borrow vstubs.ersions from its implementation library.
+			// Since llndk_library has dependency to its implementation library,
+			// we can safely access stubsVersionsFor() with its baseModuleName.
+			versions := stubsVersionsFor(mctx.Config())[c.BaseModuleName()]
+			// save the list of versions for later use
+			stubsVersionsFor(mctx.Config())[mctx.ModuleName()] = versions
+
+			createVersionVariations(mctx, versions)
+			return
+		}
+
+		mctx.CreateVariations("")
 		return
 	}
 	if genrule, ok := mctx.Module().(*genrule.Module); ok {
