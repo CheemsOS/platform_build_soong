@@ -227,6 +227,16 @@ var neverallowTests = []struct {
 		},
 	},
 	{
+		name: "sdk_version: \"none\" on android_*stubs_current stub",
+		fs: map[string][]byte{
+			"frameworks/base/Android.bp": []byte(`
+				java_library {
+					name: "android_stubs_current",
+					sdk_version: "none",
+				}`),
+		},
+	},
+	{
 		name: "sdk_version: \"none\" outside core libraries",
 		fs: map[string][]byte{
 			"Android.bp": []byte(`
@@ -249,6 +259,73 @@ var neverallowTests = []struct {
 				}`),
 		},
 	},
+	// CC sdk rule tests
+	{
+		name: `"sdk_variant_only" outside whitelist`,
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				cc_library {
+					name: "outside_whitelist",
+					sdk_version: "current",
+					sdk_variant_only: true,
+				}`),
+		},
+		expectedErrors: []string{
+			`module "outside_whitelist": violates neverallow`,
+		},
+	},
+	{
+		name: `"sdk_variant_only: false" outside whitelist`,
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				cc_library {
+					name: "outside_whitelist",
+					sdk_version: "current",
+					sdk_variant_only: false,
+				}`),
+		},
+		expectedErrors: []string{
+			`module "outside_whitelist": violates neverallow`,
+		},
+	},
+	{
+		name: `"platform" outside whitelist`,
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				cc_library {
+					name: "outside_whitelist",
+					platform: {
+						shared_libs: ["libfoo"],
+					},
+				}`),
+		},
+		expectedErrors: []string{
+			`module "outside_whitelist": violates neverallow`,
+		},
+	},
+	{
+		name: "uncompress_dex inside art",
+		fs: map[string][]byte{
+			"art/Android.bp": []byte(`
+				java_library {
+					name: "inside_art_libraries",
+					uncompress_dex: true,
+				}`),
+		},
+	},
+	{
+		name: "uncompress_dex outside art",
+		fs: map[string][]byte{
+			"other/Android.bp": []byte(`
+				java_library {
+					name: "outside_art_libraries",
+					uncompress_dex: true,
+				}`),
+		},
+		expectedErrors: []string{
+			"module \"outside_art_libraries\": violates neverallow",
+		},
+	},
 }
 
 func TestNeverallow(t *testing.T) {
@@ -259,7 +336,7 @@ func TestNeverallow(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// If the test has its own rules then use them instead of the default ones.
 			if test.rules != nil {
-				setTestNeverallowRules(config, test.rules)
+				SetTestNeverallowRules(config, test.rules)
 			}
 			_, errs := testNeverallow(config)
 			CheckErrorsAgainstExpectations(t, errs, test.expectedErrors)
@@ -273,7 +350,7 @@ func testNeverallow(config Config) (*TestContext, []error) {
 	ctx.RegisterModuleType("java_library", newMockJavaLibraryModule)
 	ctx.RegisterModuleType("java_library_host", newMockJavaLibraryModule)
 	ctx.RegisterModuleType("java_device_for_host", newMockJavaLibraryModule)
-	ctx.PostDepsMutators(registerNeverallowMutator)
+	ctx.PostDepsMutators(RegisterNeverallowMutator)
 	ctx.Register(config)
 
 	_, errs := ctx.ParseBlueprintsFiles("Android.bp")
@@ -289,6 +366,8 @@ type mockCcLibraryProperties struct {
 	Include_dirs     []string
 	Vendor_available *bool
 	Static_libs      []string
+	Sdk_version      *string
+	Sdk_variant_only *bool
 
 	Vndk struct {
 		Enabled                *bool
@@ -304,6 +383,10 @@ type mockCcLibraryProperties struct {
 		Treble_linker_namespaces struct {
 			Cflags []string
 		}
+	}
+
+	Platform struct {
+		Shared_libs []string
 	}
 }
 
@@ -336,8 +419,9 @@ func (p *mockCcLibraryModule) GenerateAndroidBuildActions(ModuleContext) {
 }
 
 type mockJavaLibraryProperties struct {
-	Libs        []string
-	Sdk_version *string
+	Libs           []string
+	Sdk_version    *string
+	Uncompress_dex *bool
 }
 
 type mockJavaLibraryModule struct {

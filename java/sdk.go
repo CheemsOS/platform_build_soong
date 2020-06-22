@@ -35,6 +35,7 @@ func init() {
 
 var sdkVersionsKey = android.NewOnceKey("sdkVersionsKey")
 var sdkFrameworkAidlPathKey = android.NewOnceKey("sdkFrameworkAidlPathKey")
+var nonUpdatableFrameworkAidlPathKey = android.NewOnceKey("nonUpdatableFrameworkAidlPathKey")
 var apiFingerprintPathKey = android.NewOnceKey("apiFingerprintPathKey")
 
 type sdkContext interface {
@@ -147,6 +148,10 @@ type sdkSpec struct {
 	raw     string
 }
 
+func (s sdkSpec) String() string {
+	return fmt.Sprintf("%s_%s", s.kind, s.version)
+}
+
 // valid checks if this sdkSpec is well-formed. Note however that true doesn't mean that the
 // specified SDK actually exists.
 func (s sdkSpec) valid() bool {
@@ -156,6 +161,26 @@ func (s sdkSpec) valid() bool {
 // specified checks if this sdkSpec is well-formed and is not "".
 func (s sdkSpec) specified() bool {
 	return s.valid() && s.kind != sdkPrivate
+}
+
+// whether the API surface is managed and versioned, i.e. has .txt file that
+// get frozen on SDK freeze and changes get reviewed by API council.
+func (s sdkSpec) stable() bool {
+	if !s.specified() {
+		return false
+	}
+	switch s.kind {
+	case sdkNone:
+		// there is nothing to manage and version in this case; de facto stable API.
+		return true
+	case sdkCore, sdkPublic, sdkSystem, sdkModule, sdkSystemServer:
+		return true
+	case sdkCorePlatform, sdkTest, sdkPrivate:
+		return false
+	default:
+		panic(fmt.Errorf("unknown sdkKind=%v", s.kind))
+	}
+	return false
 }
 
 // prebuiltSdkAvailableForUnbundledBuilt tells whether this sdkSpec can have a prebuilt SDK
@@ -226,6 +251,20 @@ func (s sdkSpec) effectiveVersionString(ctx android.EarlyModuleContext) (string,
 		return ctx.Config().DefaultAppTargetSdk(), nil
 	}
 	return ver.String(), err
+}
+
+func (s sdkSpec) defaultJavaLanguageVersion(ctx android.EarlyModuleContext) javaVersion {
+	sdk, err := s.effectiveVersion(ctx)
+	if err != nil {
+		ctx.PropertyErrorf("sdk_version", "%s", err)
+	}
+	if sdk <= 23 {
+		return JAVA_VERSION_7
+	} else if sdk <= 29 {
+		return JAVA_VERSION_8
+	} else {
+		return JAVA_VERSION_9
+	}
 }
 
 func sdkSpecFrom(str string) sdkSpec {
@@ -321,10 +360,16 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 			return sdkDep{}
 		}
 
+		var systemModules string
+		if sdkVersion.defaultJavaLanguageVersion(ctx).usesJavaModules() {
+			systemModules = "sdk_public_" + sdkVersion.version.String() + "_system_modules"
+		}
+
 		return sdkDep{
-			useFiles: true,
-			jars:     android.Paths{jarPath.Path(), lambdaStubsPath},
-			aidl:     android.OptionalPathForPath(aidlPath.Path()),
+			useFiles:      true,
+			jars:          android.Paths{jarPath.Path(), lambdaStubsPath},
+			aidl:          android.OptionalPathForPath(aidlPath.Path()),
+			systemModules: systemModules,
 		}
 	}
 
@@ -393,7 +438,7 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 		return toModule([]string{"core.current.stubs"}, "", nil)
 	case sdkModule:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return toModule([]string{"android_module_lib_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
+		return toModule([]string{"android_module_lib_stubs_current"}, "framework-res", nonUpdatableFrameworkAidlPath(ctx))
 	case sdkSystemServer:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
 		return toModule([]string{"android_system_server_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
@@ -452,6 +497,7 @@ func (sdkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	}
 
 	createSdkFrameworkAidl(ctx)
+	createNonUpdatableFrameworkAidl(ctx)
 	createAPIFingerprint(ctx)
 }
 
@@ -463,6 +509,31 @@ func createSdkFrameworkAidl(ctx android.SingletonContext) {
 		"android_system_stubs_current",
 	}
 
+	combinedAidl := sdkFrameworkAidlPath(ctx)
+	tempPath := combinedAidl.ReplaceExtension(ctx, "aidl.tmp")
+
+	rule := createFrameworkAidl(stubsModules, tempPath, ctx)
+
+	commitChangeForRestat(rule, tempPath, combinedAidl)
+
+	rule.Build(pctx, ctx, "framework_aidl", "generate framework.aidl")
+}
+
+// Creates a version of framework.aidl for the non-updatable part of the platform.
+func createNonUpdatableFrameworkAidl(ctx android.SingletonContext) {
+	stubsModules := []string{"android_module_lib_stubs_current"}
+
+	combinedAidl := nonUpdatableFrameworkAidlPath(ctx)
+	tempPath := combinedAidl.ReplaceExtension(ctx, "aidl.tmp")
+
+	rule := createFrameworkAidl(stubsModules, tempPath, ctx)
+
+	commitChangeForRestat(rule, tempPath, combinedAidl)
+
+	rule.Build(pctx, ctx, "framework_non_updatable_aidl", "generate framework_non_updatable.aidl")
+}
+
+func createFrameworkAidl(stubsModules []string, path android.OutputPath, ctx android.SingletonContext) *android.RuleBuilder {
 	stubsJars := make([]android.Paths, len(stubsModules))
 
 	ctx.VisitAllModules(func(module android.Module) {
@@ -482,8 +553,7 @@ func createSdkFrameworkAidl(ctx android.SingletonContext) {
 			if ctx.Config().AllowMissingDependencies() {
 				missingDeps = append(missingDeps, stubsModules[i])
 			} else {
-				ctx.Errorf("failed to find dex jar path for module %q",
-					stubsModules[i])
+				ctx.Errorf("failed to find dex jar path for module %q", stubsModules[i])
 			}
 		}
 	}
@@ -507,25 +577,26 @@ func createSdkFrameworkAidl(ctx android.SingletonContext) {
 		}
 	}
 
-	combinedAidl := sdkFrameworkAidlPath(ctx)
-	tempPath := combinedAidl.ReplaceExtension(ctx, "aidl.tmp")
-
 	rule.Command().
-		Text("rm -f").Output(tempPath)
+		Text("rm -f").Output(path)
 	rule.Command().
 		Text("cat").
 		Inputs(aidls).
 		Text("| sort -u >").
-		Output(tempPath)
+		Output(path)
 
-	commitChangeForRestat(rule, tempPath, combinedAidl)
-
-	rule.Build(pctx, ctx, "framework_aidl", "generate framework.aidl")
+	return rule
 }
 
 func sdkFrameworkAidlPath(ctx android.PathContext) android.OutputPath {
 	return ctx.Config().Once(sdkFrameworkAidlPathKey, func() interface{} {
 		return android.PathForOutput(ctx, "framework.aidl")
+	}).(android.OutputPath)
+}
+
+func nonUpdatableFrameworkAidlPath(ctx android.PathContext) android.OutputPath {
+	return ctx.Config().Once(nonUpdatableFrameworkAidlPathKey, func() interface{} {
+		return android.PathForOutput(ctx, "framework_non_updatable.aidl")
 	}).(android.OutputPath)
 }
 

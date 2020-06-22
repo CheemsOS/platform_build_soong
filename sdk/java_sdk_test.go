@@ -24,7 +24,61 @@ func testSdkWithJava(t *testing.T, bp string) *testSdkResult {
 	fs := map[string][]byte{
 		"Test.java":              nil,
 		"aidl/foo/bar/Test.aidl": nil,
+
+		// For java_sdk_library
+		"api/current.txt":                                   nil,
+		"api/removed.txt":                                   nil,
+		"api/system-current.txt":                            nil,
+		"api/system-removed.txt":                            nil,
+		"api/test-current.txt":                              nil,
+		"api/test-removed.txt":                              nil,
+		"api/module-lib-current.txt":                        nil,
+		"api/module-lib-removed.txt":                        nil,
+		"api/system-server-current.txt":                     nil,
+		"api/system-server-removed.txt":                     nil,
+		"build/soong/scripts/gen-java-current-api-files.sh": nil,
 	}
+
+	// for java_sdk_library tests
+	bp = `
+java_system_modules_import {
+	name: "core-current-stubs-system-modules",
+}
+java_system_modules_import {
+	name: "core-platform-api-stubs-system-modules",
+}
+java_import {
+	name: "core.platform.api.stubs",
+}
+java_import {
+	name: "android_stubs_current",
+}
+java_import {
+	name: "android_system_stubs_current",
+}
+java_import {
+	name: "android_test_stubs_current",
+}
+java_import {
+	name: "android_module_lib_stubs_current",
+}
+java_import {
+	name: "android_system_server_stubs_current",
+}
+java_import {
+	name: "core-lambda-stubs", 
+	sdk_version: "none",
+}
+java_import {
+	name: "ext", 
+	sdk_version: "none",
+}
+java_import {
+	name: "framework", 
+	sdk_version: "none",
+}
+` + bp
+
 	return testSdkWithFs(t, bp, fs)
 }
 
@@ -53,30 +107,18 @@ func TestBasicSdkWithJavaLibrary(t *testing.T) {
 			system_modules: "none",
 			sdk_version: "none",
 			host_supported: true,
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
 		}
 
 		java_import {
 			name: "sdkmember_mysdk_1",
 			sdk_member_name: "sdkmember",
 			host_supported: true,
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
 		}
 
 		java_import {
 			name: "sdkmember_mysdk_2",
 			sdk_member_name: "sdkmember",
 			host_supported: true,
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
 		}
 
 		java_library {
@@ -141,7 +183,7 @@ func TestSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "android_common", "",
+	result.CheckSnapshot("mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -196,7 +238,7 @@ func TestHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "linux_glibc_common", "",
+	result.CheckSnapshot("mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -230,6 +272,72 @@ aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 	)
 }
 
+func TestDeviceAndHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
+	// b/145598135 - Generating host snapshots for anything other than linux is not supported.
+	SkipIfNotLinux(t)
+
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			host_supported: true,
+			java_header_libs: ["myjavalib"],
+		}
+
+		java_library {
+			name: "myjavalib",
+			host_supported: true,
+			srcs: ["Test.java"],
+			system_modules: "none",
+			sdk_version: "none",
+			compile_dex: true,
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    host_supported: true,
+    target: {
+        android: {
+            jars: ["java/android/myjavalib.jar"],
+        },
+        linux_glibc: {
+            jars: ["java/linux_glibc/myjavalib.jar"],
+        },
+    },
+}
+
+java_import {
+    name: "myjavalib",
+    prefer: false,
+    host_supported: true,
+    target: {
+        android: {
+            jars: ["java/android/myjavalib.jar"],
+        },
+        linux_glibc: {
+            jars: ["java/linux_glibc/myjavalib.jar"],
+        },
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    host_supported: true,
+    java_header_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib/android_common/turbine-combined/myjavalib.jar -> java/android/myjavalib.jar
+.intermediates/myjavalib/linux_glibc_common/javac/myjavalib.jar -> java/linux_glibc/myjavalib.jar
+`),
+	)
+}
+
 func TestSnapshotWithJavaImplLibrary(t *testing.T) {
 	result := testSdkWithJava(t, `
 		module_exports {
@@ -250,7 +358,7 @@ func TestSnapshotWithJavaImplLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "android_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -305,7 +413,7 @@ func TestHostSnapshotWithJavaImplLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "linux_glibc_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -356,7 +464,7 @@ func TestSnapshotWithJavaTest(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "android_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -409,7 +517,7 @@ func TestHostSnapshotWithJavaTest(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "linux_glibc_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -503,7 +611,7 @@ func TestSnapshotWithDroidstubs(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "android_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -526,7 +634,7 @@ module_exports_snapshot {
 
 `),
 		checkAllCopyRules(""),
-		checkMergeZip(".intermediates/myexports/android_common/tmp/java/myjavaapistubs_stubs_sources.zip"),
+		checkMergeZips(".intermediates/myexports/common_os/tmp/java/myjavaapistubs_stubs_sources.zip"),
 	)
 }
 
@@ -552,7 +660,7 @@ func TestHostSnapshotWithDroidstubs(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "linux_glibc_common", "",
+	result.CheckSnapshot("myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -580,7 +688,7 @@ module_exports_snapshot {
 }
 `),
 		checkAllCopyRules(""),
-		checkMergeZip(".intermediates/myexports/linux_glibc_common/tmp/java/myjavaapistubs_stubs_sources.zip"),
+		checkMergeZips(".intermediates/myexports/common_os/tmp/java/myjavaapistubs_stubs_sources.zip"),
 	)
 }
 
@@ -612,7 +720,7 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "android_common", "",
+	result.CheckSnapshot("mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -702,7 +810,7 @@ func TestHostSnapshotWithJavaSystemModules(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "linux_glibc_common", "",
+	result.CheckSnapshot("mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -748,5 +856,705 @@ sdk_snapshot {
 }
 `),
 		checkAllCopyRules(".intermediates/system-module/linux_glibc_common/javac/system-module.jar -> java/system-module.jar"),
+	)
+}
+
+func TestDeviceAndHostSnapshotWithOsSpecificMembers(t *testing.T) {
+	// b/145598135 - Generating host snapshots for anything other than linux is not supported.
+	SkipIfNotLinux(t)
+
+	result := testSdkWithJava(t, `
+		module_exports {
+			name: "myexports",
+			host_supported: true,
+			java_libs: ["myjavalib"],
+			target: {
+				android: {
+					java_header_libs: ["androidjavalib"],
+				},
+				host: {
+					java_header_libs: ["hostjavalib"],
+				},
+			},
+		}
+
+		java_library {
+			name: "myjavalib",
+			host_supported: true,
+			srcs: ["Test.java"],
+			system_modules: "none",
+			sdk_version: "none",
+		}
+
+		java_library {
+			name: "androidjavalib",
+			srcs: ["Test.java"],
+			system_modules: "none",
+			sdk_version: "none",
+		}
+
+		java_library_host {
+			name: "hostjavalib",
+			srcs: ["Test.java"],
+		}
+	`)
+
+	result.CheckSnapshot("myexports", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_import {
+    name: "myexports_hostjavalib@current",
+    sdk_member_name: "hostjavalib",
+    device_supported: false,
+    host_supported: true,
+    jars: ["java/hostjavalib.jar"],
+}
+
+java_import {
+    name: "hostjavalib",
+    prefer: false,
+    device_supported: false,
+    host_supported: true,
+    jars: ["java/hostjavalib.jar"],
+}
+
+java_import {
+    name: "myexports_androidjavalib@current",
+    sdk_member_name: "androidjavalib",
+    jars: ["java/androidjavalib.jar"],
+}
+
+java_import {
+    name: "androidjavalib",
+    prefer: false,
+    jars: ["java/androidjavalib.jar"],
+}
+
+java_import {
+    name: "myexports_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    host_supported: true,
+    target: {
+        android: {
+            jars: ["java/android/myjavalib.jar"],
+        },
+        linux_glibc: {
+            jars: ["java/linux_glibc/myjavalib.jar"],
+        },
+    },
+}
+
+java_import {
+    name: "myjavalib",
+    prefer: false,
+    host_supported: true,
+    target: {
+        android: {
+            jars: ["java/android/myjavalib.jar"],
+        },
+        linux_glibc: {
+            jars: ["java/linux_glibc/myjavalib.jar"],
+        },
+    },
+}
+
+module_exports_snapshot {
+    name: "myexports@current",
+    host_supported: true,
+    java_libs: ["myexports_myjavalib@current"],
+    target: {
+        android: {
+            java_header_libs: ["myexports_androidjavalib@current"],
+        },
+        linux_glibc: {
+            java_header_libs: ["myexports_hostjavalib@current"],
+        },
+    },
+}
+`),
+		checkAllCopyRules(`
+.intermediates/hostjavalib/linux_glibc_common/javac/hostjavalib.jar -> java/hostjavalib.jar
+.intermediates/androidjavalib/android_common/turbine-combined/androidjavalib.jar -> java/androidjavalib.jar
+.intermediates/myjavalib/android_common/javac/myjavalib.jar -> java/android/myjavalib.jar
+.intermediates/myjavalib/linux_glibc_common/javac/myjavalib.jar -> java/linux_glibc/myjavalib.jar
+`),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			apex_available: ["//apex_available:anyapex"],
+			srcs: ["Test.java"],
+			sdk_version: "current",
+			shared_library: false,
+			stubs_library_visibility: ["//other"],
+			stubs_source_visibility: ["//another"],
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: false,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+    test: {
+        jars: ["sdk_library/test/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/test/myjavalib_stub_sources"],
+        current_api: "sdk_library/test/myjavalib.txt",
+        removed_api: "sdk_library/test/myjavalib-removed.txt",
+        sdk_version: "test_current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: false,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+    test: {
+        jars: ["sdk_library/test/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/test/myjavalib_stub_sources"],
+        current_api: "sdk_library/test/myjavalib.txt",
+        removed_api: "sdk_library/test/myjavalib-removed.txt",
+        sdk_version: "test_current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.test/android_common/javac/myjavalib.stubs.test.jar -> sdk_library/test/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.test/android_common/myjavalib.stubs.source.test_api.txt -> sdk_library/test/myjavalib.txt
+.intermediates/myjavalib.stubs.source.test/android_common/myjavalib.stubs.source.test_removed.txt -> sdk_library/test/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/system/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/test/myjavalib_stub_sources.zip"),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_SdkVersion_None(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			srcs: ["Test.java"],
+			sdk_version: "none",
+			system_modules: "none",
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "none",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "none",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+		),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			srcs: ["Test.java"],
+			sdk_version: "module_current",
+			public: {
+				enabled: true,
+				sdk_version: "module_current",
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "module_current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "module_current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+		),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_ApiScopes(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			apex_available: ["//apex_available:anyapex"],
+			srcs: ["Test.java"],
+			sdk_version: "current",
+			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/system/myjavalib_stub_sources.zip",
+		),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_ModuleLib(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			apex_available: ["//apex_available:anyapex"],
+			srcs: ["Test.java"],
+			sdk_version: "current",
+			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+    module_lib: {
+        jars: ["sdk_library/module-lib/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/module-lib/myjavalib_stub_sources"],
+        current_api: "sdk_library/module-lib/myjavalib.txt",
+        removed_api: "sdk_library/module-lib/myjavalib-removed.txt",
+        sdk_version: "module_current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+    module_lib: {
+        jars: ["sdk_library/module-lib/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/module-lib/myjavalib_stub_sources"],
+        current_api: "sdk_library/module-lib/myjavalib.txt",
+        removed_api: "sdk_library/module-lib/myjavalib-removed.txt",
+        sdk_version: "module_current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.module_lib/android_common/javac/myjavalib.stubs.module_lib.jar -> sdk_library/module-lib/myjavalib-stubs.jar
+.intermediates/myjavalib.api.module_lib/android_common/myjavalib.api.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
+.intermediates/myjavalib.api.module_lib/android_common/myjavalib.api.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/system/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/module-lib/myjavalib_stub_sources.zip",
+		),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_SystemServer(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			apex_available: ["//apex_available:anyapex"],
+			srcs: ["Test.java"],
+			sdk_version: "current",
+			public: {
+				enabled: true,
+			},
+			system_server: {
+				enabled: true,
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system_server: {
+        jars: ["sdk_library/system-server/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system-server/myjavalib_stub_sources"],
+        current_api: "sdk_library/system-server/myjavalib.txt",
+        removed_api: "sdk_library/system-server/myjavalib-removed.txt",
+        sdk_version: "system_server_current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    apex_available: ["//apex_available:anyapex"],
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+    system_server: {
+        jars: ["sdk_library/system-server/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system-server/myjavalib_stub_sources"],
+        current_api: "sdk_library/system-server/myjavalib.txt",
+        removed_api: "sdk_library/system-server/myjavalib-removed.txt",
+        sdk_version: "system_server_current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.system_server/android_common/javac/myjavalib.stubs.system_server.jar -> sdk_library/system-server/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system_server/android_common/myjavalib.stubs.source.system_server_api.txt -> sdk_library/system-server/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system_server/android_common/myjavalib.stubs.source.system_server_removed.txt -> sdk_library/system-server/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+			".intermediates/mysdk/common_os/tmp/sdk_library/system-server/myjavalib_stub_sources.zip",
+		),
+	)
+}
+
+func TestSnapshotWithJavaSdkLibrary_NamingScheme(t *testing.T) {
+	result := testSdkWithJava(t, `
+		sdk {
+			name: "mysdk",
+			java_sdk_libs: ["myjavalib"],
+		}
+
+		java_sdk_library {
+			name: "myjavalib",
+			apex_available: ["//apex_available:anyapex"],
+			srcs: ["Test.java"],
+			sdk_version: "current",
+			naming_scheme: "framework-modules",
+			public: {
+				enabled: true,
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    apex_available: ["//apex_available:anyapex"],
+    naming_scheme: "framework-modules",
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+}
+
+java_sdk_library_import {
+    name: "myjavalib",
+    prefer: false,
+    apex_available: ["//apex_available:anyapex"],
+    naming_scheme: "framework-modules",
+    shared_library: true,
+    public: {
+        jars: ["sdk_library/public/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
+        current_api: "sdk_library/public/myjavalib.txt",
+        removed_api: "sdk_library/public/myjavalib-removed.txt",
+        sdk_version: "current",
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_sdk_libs: ["mysdk_myjavalib@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/myjavalib-stubs-publicapi/android_common/javac/myjavalib-stubs-publicapi.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib-stubs-srcs-publicapi/android_common/myjavalib-stubs-srcs-publicapi_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib-stubs-srcs-publicapi/android_common/myjavalib-stubs-srcs-publicapi_removed.txt -> sdk_library/public/myjavalib-removed.txt
+`),
+		checkMergeZips(
+			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
+		),
 	)
 }

@@ -19,6 +19,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 			name: "myapex.cert",
 			certificate: "myapex",
 		}
-	` + cc.GatherRequiredDepsForTest(android.Android)
+	` + cc.GatherRequiredDepsForTest(android.Android, android.Windows)
 
 	mockFS := map[string][]byte{
 		"build/make/target/product/security":         nil,
@@ -61,7 +62,23 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 
 	config := android.TestArchConfig(buildDir, nil, bp, mockFS)
 
+	// Add windows as a default disable OS to test behavior when some OS variants
+	// are disabled.
+	config.Targets[android.Windows] = []android.Target{
+		{android.Windows, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", ""},
+	}
+
 	ctx := android.NewTestArchContext()
+
+	// Enable androidmk support.
+	// * Register the singleton
+	// * Configure that we are inside make
+	// * Add CommonOS to ensure that androidmk processing works.
+	android.RegisterAndroidMkBuildComponents(ctx)
+	android.SetInMakeForTests(config)
+	config.Targets[android.CommonOS] = []android.Target{
+		{android.CommonOS, android.Arch{ArchType: android.Common}, android.NativeBridgeDisabled, "", ""},
+	}
 
 	// from android package
 	android.RegisterPackageBuildComponents(ctx)
@@ -73,6 +90,7 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	// from java package
 	java.RegisterJavaBuildComponents(ctx)
 	java.RegisterAppBuildComponents(ctx)
+	java.RegisterSdkLibraryBuildComponents(ctx)
 	java.RegisterStubsBuildComponents(ctx)
 	java.RegisterSystemModulesBuildComponents(ctx)
 
@@ -155,9 +173,25 @@ func (h *TestHelper) AssertStringEquals(message string, expected string, actual 
 	}
 }
 
+func (h *TestHelper) AssertErrorMessageEquals(message string, expected string, actual error) {
+	h.t.Helper()
+	if actual == nil {
+		h.t.Errorf("Expected error but was nil")
+	} else if actual.Error() != expected {
+		h.t.Errorf("%s: expected %s, actual %s", message, expected, actual.Error())
+	}
+}
+
 func (h *TestHelper) AssertTrimmedStringEquals(message string, expected string, actual string) {
 	h.t.Helper()
 	h.AssertStringEquals(message, strings.TrimSpace(expected), strings.TrimSpace(actual))
+}
+
+func (h *TestHelper) AssertDeepEquals(message string, expected interface{}, actual interface{}) {
+	h.t.Helper()
+	if !reflect.DeepEqual(actual, expected) {
+		h.t.Errorf("%s: expected %#v, actual %#v", message, expected, actual)
+	}
 }
 
 // Encapsulates result of processing an SDK definition. Provides support for
@@ -173,7 +207,7 @@ type testSdkResult struct {
 // e.g. find the src/dest pairs from each cp command, the various zip files
 // generated, etc.
 func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
-	androidBpContents := strings.NewReplacer("\\n", "\n").Replace(sdk.GetAndroidBpContentsForTests())
+	androidBpContents := sdk.GetAndroidBpContentsForTests()
 
 	info := &snapshotBuildInfo{
 		r:                 r,
@@ -182,15 +216,23 @@ func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
 
 	buildParams := sdk.BuildParamsForTests()
 	copyRules := &strings.Builder{}
+	otherCopyRules := &strings.Builder{}
+	snapshotDirPrefix := sdk.builderForTests.snapshotDir.String() + "/"
 	for _, bp := range buildParams {
 		switch bp.Rule.String() {
 		case android.Cp.String():
-			// Get source relative to build directory.
-			src := android.NormalizePathForTesting(bp.Input)
+			output := bp.Output
 			// Get destination relative to the snapshot root
-			dest := bp.Output.Rel()
-			_, _ = fmt.Fprintf(copyRules, "%s -> %s\n", src, dest)
-			info.snapshotContents = append(info.snapshotContents, dest)
+			dest := output.Rel()
+			src := android.NormalizePathForTesting(bp.Input)
+			// We differentiate between copy rules for the snapshot, and copy rules for the install file.
+			if strings.HasPrefix(output.String(), snapshotDirPrefix) {
+				// Get source relative to build directory.
+				_, _ = fmt.Fprintf(copyRules, "%s -> %s\n", src, dest)
+				info.snapshotContents = append(info.snapshotContents, dest)
+			} else {
+				_, _ = fmt.Fprintf(otherCopyRules, "%s -> %s\n", src, dest)
+			}
 
 		case repackageZip.String():
 			// Add the destdir to the snapshot contents as that is effectively where
@@ -223,6 +265,7 @@ func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
 	}
 
 	info.copyRules = copyRules.String()
+	info.otherCopyRules = otherCopyRules.String()
 
 	return info
 }
@@ -240,8 +283,11 @@ func (r *testSdkResult) ModuleForTests(name string, variant string) android.Test
 // Takes a list of functions which check different facets of the snapshot build rules.
 // Allows each test to customize what is checked without duplicating lots of code
 // or proliferating check methods of different flavors.
-func (r *testSdkResult) CheckSnapshot(name string, variant string, dir string, checkers ...snapshotBuildInfoChecker) {
+func (r *testSdkResult) CheckSnapshot(name string, dir string, checkers ...snapshotBuildInfoChecker) {
 	r.t.Helper()
+
+	// The sdk CommonOS variant is always responsible for generating the snapshot.
+	variant := android.CommonOS.Name
 
 	sdk := r.Module(name, variant).(*sdk)
 
@@ -295,14 +341,22 @@ func checkAllCopyRules(expected string) snapshotBuildInfoChecker {
 	}
 }
 
-// Check that the specified path is in the list of zips to merge with the intermediate zip.
-func checkMergeZip(expected string) snapshotBuildInfoChecker {
+func checkAllOtherCopyRules(expected string) snapshotBuildInfoChecker {
+	return func(info *snapshotBuildInfo) {
+		info.r.t.Helper()
+		info.r.AssertTrimmedStringEquals("Incorrect copy rules", expected, info.otherCopyRules)
+	}
+}
+
+// Check that the specified paths match the list of zips to merge with the intermediate zip.
+func checkMergeZips(expected ...string) snapshotBuildInfoChecker {
 	return func(info *snapshotBuildInfo) {
 		info.r.t.Helper()
 		if info.intermediateZip == "" {
 			info.r.t.Errorf("No intermediate zip file was created")
 		}
-		ensureListContains(info.r.t, info.mergeZips, expected)
+
+		info.r.AssertDeepEquals("mismatching merge zip files", expected, info.mergeZips)
 	}
 }
 
@@ -321,9 +375,13 @@ type snapshotBuildInfo struct {
 	// snapshot.
 	snapshotContents []string
 
-	// A formatted representation of the src/dest pairs, one pair per line, of the format
-	// src -> dest
+	// A formatted representation of the src/dest pairs for a snapshot, one pair per line,
+	// of the format src -> dest
 	copyRules string
+
+	// A formatted representation of the src/dest pairs for files not in a snapshot, one pair
+	// per line, of the format src -> dest
+	otherCopyRules string
 
 	// The path to the intermediate zip, which is a zip created from the source files copied
 	// into the snapshot directory and which will be merged with other zips to form the final output.

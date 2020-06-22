@@ -16,6 +16,8 @@ package sdk
 
 import (
 	"testing"
+
+	"github.com/google/blueprint/proptools"
 )
 
 // Needed in an _test.go file in this package to ensure tests run correctly, particularly in IDE.
@@ -101,6 +103,7 @@ func TestSnapshotVisibility(t *testing.T) {
 				"myjavalib",
 				"mypublicjavalib",
 				"mydefaultedjavalib",
+				"myprivatejavalib",
 			],
 		}
 
@@ -138,6 +141,14 @@ func TestSnapshotVisibility(t *testing.T) {
 			system_modules: "none",
 			sdk_version: "none",
 		}
+
+		java_library {
+			name: "myprivatejavalib",
+			srcs: ["Test.java"],
+			visibility: ["//visibility:private"],
+			system_modules: "none",
+			sdk_version: "none",
+		}
 	`
 
 	result := testSdkWithFs(t, ``,
@@ -146,21 +157,27 @@ func TestSnapshotVisibility(t *testing.T) {
 			"package/Android.bp": []byte(packageBp),
 		})
 
-	result.CheckSnapshot("mysdk", "android_common", "package",
+	result.CheckSnapshot("mysdk", "package",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
 java_import {
     name: "mysdk_myjavalib@current",
     sdk_member_name: "myjavalib",
-    visibility: ["//other/foo:__pkg__"],
+    visibility: [
+        "//other/foo",
+        "//package",
+    ],
     jars: ["java/myjavalib.jar"],
 }
 
 java_import {
     name: "myjavalib",
     prefer: false,
-    visibility: ["//other/foo:__pkg__"],
+    visibility: [
+        "//other/foo",
+        "//package",
+    ],
     jars: ["java/myjavalib.jar"],
 }
 
@@ -181,28 +198,213 @@ java_import {
 java_import {
     name: "mysdk_mydefaultedjavalib@current",
     sdk_member_name: "mydefaultedjavalib",
-    visibility: ["//other/bar:__pkg__"],
+    visibility: [
+        "//other/bar",
+        "//package",
+    ],
     jars: ["java/mydefaultedjavalib.jar"],
 }
 
 java_import {
     name: "mydefaultedjavalib",
     prefer: false,
-    visibility: ["//other/bar:__pkg__"],
+    visibility: [
+        "//other/bar",
+        "//package",
+    ],
     jars: ["java/mydefaultedjavalib.jar"],
+}
+
+java_import {
+    name: "mysdk_myprivatejavalib@current",
+    sdk_member_name: "myprivatejavalib",
+    visibility: ["//package"],
+    jars: ["java/myprivatejavalib.jar"],
+}
+
+java_import {
+    name: "myprivatejavalib",
+    prefer: false,
+    visibility: ["//package"],
+    jars: ["java/myprivatejavalib.jar"],
 }
 
 sdk_snapshot {
     name: "mysdk@current",
     visibility: [
-        "//other/foo:__pkg__",
+        "//other/foo",
         "//package:__subpackages__",
     ],
     java_header_libs: [
         "mysdk_myjavalib@current",
         "mysdk_mypublicjavalib@current",
         "mysdk_mydefaultedjavalib@current",
+        "mysdk_myprivatejavalib@current",
     ],
 }
 `))
+}
+
+func TestSDkInstall(t *testing.T) {
+	sdk := `
+		sdk {
+			name: "mysdk",
+		}
+	`
+	result := testSdkWithFs(t, ``,
+		map[string][]byte{
+			"Android.bp": []byte(sdk),
+		})
+
+	result.CheckSnapshot("mysdk", "",
+		checkAllOtherCopyRules(`.intermediates/mysdk/common_os/mysdk-current.zip -> mysdk-current.zip`),
+	)
+}
+
+type EmbeddedPropertiesStruct struct {
+	S_Embedded_Common    string `android:"arch_variant"`
+	S_Embedded_Different string `android:"arch_variant"`
+}
+
+type testPropertiesStruct struct {
+	name        string
+	private     string
+	Public_Kept string `sdk:"keep"`
+	S_Common    string
+	S_Different string `android:"arch_variant"`
+	A_Common    []string
+	A_Different []string `android:"arch_variant"`
+	F_Common    *bool
+	F_Different *bool `android:"arch_variant"`
+	EmbeddedPropertiesStruct
+}
+
+func (p *testPropertiesStruct) optimizableProperties() interface{} {
+	return p
+}
+
+func (p *testPropertiesStruct) String() string {
+	return p.name
+}
+
+var _ propertiesContainer = (*testPropertiesStruct)(nil)
+
+func TestCommonValueOptimization(t *testing.T) {
+	common := &testPropertiesStruct{name: "common"}
+	structs := []propertiesContainer{
+		&testPropertiesStruct{
+			name:        "struct-0",
+			private:     "common",
+			Public_Kept: "common",
+			S_Common:    "common",
+			S_Different: "upper",
+			A_Common:    []string{"first", "second"},
+			A_Different: []string{"alpha", "beta"},
+			F_Common:    proptools.BoolPtr(false),
+			F_Different: proptools.BoolPtr(false),
+			EmbeddedPropertiesStruct: EmbeddedPropertiesStruct{
+				S_Embedded_Common:    "embedded_common",
+				S_Embedded_Different: "embedded_upper",
+			},
+		},
+		&testPropertiesStruct{
+			name:        "struct-1",
+			private:     "common",
+			Public_Kept: "common",
+			S_Common:    "common",
+			S_Different: "lower",
+			A_Common:    []string{"first", "second"},
+			A_Different: []string{"alpha", "delta"},
+			F_Common:    proptools.BoolPtr(false),
+			F_Different: proptools.BoolPtr(true),
+			EmbeddedPropertiesStruct: EmbeddedPropertiesStruct{
+				S_Embedded_Common:    "embedded_common",
+				S_Embedded_Different: "embedded_lower",
+			},
+		},
+	}
+
+	extractor := newCommonValueExtractor(common)
+
+	h := TestHelper{t}
+
+	err := extractor.extractCommonProperties(common, structs)
+	h.AssertDeepEquals("unexpected error", nil, err)
+
+	h.AssertDeepEquals("common properties not correct",
+		&testPropertiesStruct{
+			name:        "common",
+			private:     "",
+			Public_Kept: "",
+			S_Common:    "common",
+			S_Different: "",
+			A_Common:    []string{"first", "second"},
+			A_Different: []string(nil),
+			F_Common:    proptools.BoolPtr(false),
+			F_Different: nil,
+			EmbeddedPropertiesStruct: EmbeddedPropertiesStruct{
+				S_Embedded_Common:    "embedded_common",
+				S_Embedded_Different: "",
+			},
+		},
+		common)
+
+	h.AssertDeepEquals("updated properties[0] not correct",
+		&testPropertiesStruct{
+			name:        "struct-0",
+			private:     "common",
+			Public_Kept: "common",
+			S_Common:    "",
+			S_Different: "upper",
+			A_Common:    nil,
+			A_Different: []string{"alpha", "beta"},
+			F_Common:    nil,
+			F_Different: proptools.BoolPtr(false),
+			EmbeddedPropertiesStruct: EmbeddedPropertiesStruct{
+				S_Embedded_Common:    "",
+				S_Embedded_Different: "embedded_upper",
+			},
+		},
+		structs[0])
+
+	h.AssertDeepEquals("updated properties[1] not correct",
+		&testPropertiesStruct{
+			name:        "struct-1",
+			private:     "common",
+			Public_Kept: "common",
+			S_Common:    "",
+			S_Different: "lower",
+			A_Common:    nil,
+			A_Different: []string{"alpha", "delta"},
+			F_Common:    nil,
+			F_Different: proptools.BoolPtr(true),
+			EmbeddedPropertiesStruct: EmbeddedPropertiesStruct{
+				S_Embedded_Common:    "",
+				S_Embedded_Different: "embedded_lower",
+			},
+		},
+		structs[1])
+}
+
+func TestCommonValueOptimization_InvalidArchSpecificVariants(t *testing.T) {
+	common := &testPropertiesStruct{name: "common"}
+	structs := []propertiesContainer{
+		&testPropertiesStruct{
+			name:     "struct-0",
+			S_Common: "should-be-but-is-not-common0",
+		},
+		&testPropertiesStruct{
+			name:     "struct-1",
+			S_Common: "should-be-but-is-not-common1",
+		},
+	}
+
+	extractor := newCommonValueExtractor(common)
+
+	h := TestHelper{t}
+
+	err := extractor.extractCommonProperties(common, structs)
+	h.AssertErrorMessageEquals("unexpected error", `field "S_Common" is not tagged as "arch_variant" but has arch specific properties:
+    "struct-0" has value "should-be-but-is-not-common0"
+    "struct-1" has value "should-be-but-is-not-common1"`, err)
 }

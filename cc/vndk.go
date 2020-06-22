@@ -25,6 +25,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc/config"
+	"android/soong/etc"
 )
 
 const (
@@ -309,6 +310,10 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 		panic(err)
 	}
 
+	if m.HasStubsVariants() {
+		mctx.PropertyErrorf("vndk.enabled", "This library provides stubs. Shouldn't be VNDK. Consider making it as LLNDK")
+	}
+
 	vndkLibrariesLock.Lock()
 	defer vndkLibrariesLock.Unlock()
 
@@ -406,7 +411,7 @@ type vndkLibrariesTxt struct {
 	outputFile android.OutputPath
 }
 
-var _ android.PrebuiltEtcModule = &vndkLibrariesTxt{}
+var _ etc.PrebuiltEtcModule = &vndkLibrariesTxt{}
 var _ android.OutputFileProducer = &vndkLibrariesTxt{}
 
 // vndk_libraries_txt is a special kind of module type in that it name is one of

@@ -483,6 +483,15 @@ outer:
 	return list[:k]
 }
 
+// SortedUniquePaths returns what its name says
+func SortedUniquePaths(list Paths) Paths {
+	unique := FirstUniquePaths(list)
+	sort.Slice(unique, func(i, j int) bool {
+		return unique[i].String() < unique[j].String()
+	})
+	return unique
+}
+
 // LastUniquePaths returns all unique elements of a Paths, keeping the last copy of each.  It
 // modifies the Paths slice contents in place, and returns a subslice of the original slice.
 func LastUniquePaths(list Paths) Paths {
@@ -1238,13 +1247,21 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 	return ret
 }
 
-func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
-	paths = append([]string{"ndk"}, paths...)
+func pathForNdkOrSdkInstall(ctx PathContext, prefix string, paths []string) InstallPath {
+	paths = append([]string{prefix}, paths...)
 	path, err := validatePath(paths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 	return InstallPath{basePath{path, ctx.Config(), ""}, ""}
+}
+
+func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
+	return pathForNdkOrSdkInstall(ctx, "ndk", paths)
+}
+
+func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
+	return pathForNdkOrSdkInstall(ctx, "mainline-sdks", paths)
 }
 
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {

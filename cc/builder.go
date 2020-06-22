@@ -29,6 +29,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc/config"
+	"android/soong/remoteexec"
 )
 
 const (
@@ -62,9 +63,9 @@ var (
 		},
 		"ccCmd", "cFlags")
 
-	ld = pctx.AndroidStaticRule("ld",
+	ld, ldRE = remoteexec.StaticRules(pctx, "ld",
 		blueprint.RuleParams{
-			Command: "$ldCmd ${crtBegin} @${out}.rsp " +
+			Command: "$reTemplate$ldCmd ${crtBegin} @${out}.rsp " +
 				"${libFlags} ${crtEnd} -o ${out} ${ldFlags} ${extraLibFlags}",
 			CommandDeps:    []string{"$ldCmd"},
 			Rspfile:        "${out}.rsp",
@@ -72,16 +73,30 @@ var (
 			// clang -Wl,--out-implib doesn't update its output file if it hasn't changed.
 			Restat: true,
 		},
-		"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags")
+		&remoteexec.REParams{
+			Labels:          map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
+			Inputs:          []string{"${out}.rsp"},
+			RSPFile:         "${out}.rsp",
+			OutputFiles:     []string{"${out}", "$implicitOutputs"},
+			ToolchainInputs: []string{"$ldCmd"},
+			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
+		}, []string{"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags"}, []string{"implicitOutputs"})
 
-	partialLd = pctx.AndroidStaticRule("partialLd",
+	partialLd, partialLdRE = remoteexec.StaticRules(pctx, "partialLd",
 		blueprint.RuleParams{
 			// Without -no-pie, clang 7.0 adds -pie to link Android files,
 			// but -r and -pie cannot be used together.
-			Command:     "$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
+			Command:     "$reTemplate$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
-		},
-		"ldCmd", "ldFlags")
+		}, &remoteexec.REParams{
+			Labels:          map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
+			Inputs:          []string{"$inCommaList"},
+			OutputFiles:     []string{"${out}", "$implicitOutputs"},
+			ToolchainInputs: []string{"$ldCmd"},
+			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
+		}, []string{"ldCmd", "ldFlags"}, []string{"inCommaList", "implicitOutputs"})
 
 	ar = pctx.AndroidStaticRule("ar",
 		blueprint.RuleParams{
@@ -186,12 +201,18 @@ var (
 	_ = pctx.SourcePathVariable("sAbiDumper", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-dumper")
 
 	// -w has been added since header-abi-dumper does not need to produce any sort of diagnostic information.
-	sAbiDump = pctx.AndroidStaticRule("sAbiDump",
+	sAbiDump, sAbiDumpRE = remoteexec.StaticRules(pctx, "sAbiDump",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && $sAbiDumper -o ${out} $in $exportDirs -- $cFlags -w -isystem prebuilts/clang-tools/${config.HostPrebuiltTag}/clang-headers",
+			Command:     "rm -f $out && $reTemplate$sAbiDumper -o ${out} $in $exportDirs -- $cFlags -w -isystem prebuilts/clang-tools/${config.HostPrebuiltTag}/clang-headers",
 			CommandDeps: []string{"$sAbiDumper"},
-		},
-		"cFlags", "exportDirs")
+		}, &remoteexec.REParams{
+			Labels:       map[string]string{"type": "abi-dump", "tool": "header-abi-dumper"},
+			ExecStrategy: "${config.REAbiDumperExecStrategy}",
+			Platform: map[string]string{
+				remoteexec.PoolKey:      "${config.RECXXPool}",
+				"InputRootAbsolutePath": android.AbsSrcDirForExistingUseCases(),
+			},
+		}, []string{"cFlags", "exportDirs"}, nil)
 
 	_ = pctx.SourcePathVariable("sAbiLinker", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-linker")
 
@@ -262,6 +283,7 @@ func init() {
 	}
 
 	pctx.HostBinToolVariable("SoongZipCmd", "soong_zip")
+	pctx.Import("android/soong/remoteexec")
 }
 
 type builderFlags struct {
@@ -294,7 +316,7 @@ type builderFlags struct {
 	toolchain     config.Toolchain
 	sdclang       bool
 	tidy          bool
-	coverage      bool
+	gcovCoverage  bool
 	sAbiDump      bool
 	emitXrefs     bool
 
@@ -356,7 +378,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		tidyFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var coverageFiles android.Paths
-	if flags.coverage {
+	if flags.gcovCoverage {
 		coverageFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var kytheFiles android.Paths
@@ -457,7 +479,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		var ccCmd string
 		tidy := flags.tidy
-		coverage := flags.coverage
+		coverage := flags.gcovCoverage
 		dump := flags.sAbiDump
 		rule := cc
 		emitXref := flags.emitXrefs
@@ -560,8 +582,12 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			sAbiDumpFile := android.ObjPathWithExt(ctx, subdir, srcFile, "sdump")
 			sAbiDumpFiles = append(sAbiDumpFiles, sAbiDumpFile)
 
+			dumpRule := sAbiDump
+			if ctx.Config().IsEnvTrue("RBE_ABI_DUMPER") {
+				dumpRule = sAbiDumpRE
+			}
 			ctx.Build(pctx, android.BuildParams{
-				Rule:        sAbiDump,
+				Rule:        dumpRule,
 				Description: "header-abi-dumper " + srcFile.Rel(),
 				Output:      sAbiDumpFile,
 				Input:       srcFile,
@@ -674,21 +700,28 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 		deps = append(deps, crtBegin.Path(), crtEnd.Path())
 	}
 
+	rule := ld
+	args := map[string]string{
+		"ldCmd":         ldCmd,
+		"crtBegin":      crtBegin.String(),
+		"libFlags":      strings.Join(libFlagsList, " "),
+		"extraLibFlags": flags.extraLibFlags,
+		"ldFlags":       flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
+		"crtEnd":        crtEnd.String(),
+	}
+	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+		rule = ldRE
+		args["implicitOutputs"] = strings.Join(implicitOutputs.Strings(), ",")
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:            ld,
+		Rule:            rule,
 		Description:     "link " + outputFile.Base(),
 		Output:          outputFile,
 		ImplicitOutputs: implicitOutputs,
 		Inputs:          objFiles,
 		Implicits:       deps,
-		Args: map[string]string{
-			"ldCmd":         ldCmd,
-			"crtBegin":      crtBegin.String(),
-			"libFlags":      strings.Join(libFlagsList, " "),
-			"extraLibFlags": flags.extraLibFlags,
-			"ldFlags":       flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
-			"crtEnd":        crtEnd.String(),
-		},
+		Args:            args,
 	})
 }
 
@@ -835,16 +868,22 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 		ldCmd = "${config.ClangBin}/clang++"
 	}
 
+	rule := partialLd
+	args := map[string]string{
+		"ldCmd":   ldCmd,
+		"ldFlags": flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
+	}
+	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+		rule = partialLdRE
+		args["inCommaList"] = strings.Join(objFiles.Strings(), ",")
+	}
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        partialLd,
+		Rule:        rule,
 		Description: "link " + outputFile.Base(),
 		Output:      outputFile,
 		Inputs:      objFiles,
 		Implicits:   deps,
-		Args: map[string]string{
-			"ldCmd":   ldCmd,
-			"ldFlags": flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
-		},
+		Args:        args,
 	})
 }
 
