@@ -221,6 +221,7 @@ type Module interface {
 	Disable()
 	Enabled() bool
 	Target() Target
+	Owner() string
 	InstallInData() bool
 	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
@@ -507,6 +508,9 @@ type commonProperties struct {
 	CommonOSVariant bool `blueprint:"mutated"`
 
 	SkipInstall bool `blueprint:"mutated"`
+
+	// Disabled by mutators. If set to true, it overrides Enabled property.
+	ForcedDisabled bool `blueprint:"mutated"`
 
 	NamespaceExportedToMake bool `blueprint:"mutated"`
 
@@ -937,6 +941,9 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 }
 
 func (m *ModuleBase) Enabled() bool {
+	if m.commonProperties.ForcedDisabled {
+		return false
+	}
 	if m.commonProperties.Enabled == nil {
 		return !m.Os().DefaultDisabled
 	}
@@ -944,7 +951,7 @@ func (m *ModuleBase) Enabled() bool {
 }
 
 func (m *ModuleBase) Disable() {
-	m.commonProperties.Enabled = proptools.BoolPtr(false)
+	m.commonProperties.ForcedDisabled = true
 }
 
 func (m *ModuleBase) SkipInstall() {

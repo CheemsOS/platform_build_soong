@@ -484,18 +484,22 @@ type vendorSnapshotSingleton struct {
 
 var (
 	// Modules under following directories are ignored. They are OEM's and vendor's
-	// proprietary modules(device/, vendor/, and hardware/).
+	// proprietary modules(device/, kernel/, vendor/, and hardware/).
 	// TODO(b/65377115): Clean up these with more maintainable way
 	vendorProprietaryDirs = []string{
 		"device",
+		"kernel",
 		"vendor",
 		"hardware",
 	}
 
 	// Modules under following directories are included as they are in AOSP,
-	// although hardware/ is normally for vendor's own.
+	// although hardware/ and kernel/ are normally for vendor's own.
 	// TODO(b/65377115): Clean up these with more maintainable way
 	aospDirsUnderProprietary = []string{
+		"kernel/configs",
+		"kernel/prebuilts",
+		"kernel/tests",
 		"hardware/interfaces",
 		"hardware/libhardware",
 		"hardware/libhardware_legacy",
@@ -552,6 +556,13 @@ func isVendorSnapshotModule(m *Module, moduleDir string) bool {
 	if _, ok := m.linker.(*kernelHeadersDecorator); ok {
 		return false
 	}
+	// skip llndk_library and llndk_headers which are backward compatible
+	if _, ok := m.linker.(*llndkStubDecorator); ok {
+		return false
+	}
+	if _, ok := m.linker.(*llndkHeadersDecorator); ok {
+		return false
+	}
 
 	// Libraries
 	if l, ok := m.linker.(snapshotLibraryInterface); ok {
@@ -569,7 +580,13 @@ func isVendorSnapshotModule(m *Module, moduleDir string) bool {
 			return m.outputFile.Valid() && proptools.BoolDefault(m.VendorProperties.Vendor_available, true)
 		}
 		if l.shared() {
-			return m.outputFile.Valid() && !m.IsVndk()
+			if !m.outputFile.Valid() {
+				return false
+			}
+			if !m.IsVndk() {
+				return true
+			}
+			return m.isVndkExt()
 		}
 		return true
 	}
@@ -669,7 +686,16 @@ func (c *vendorSnapshotSingleton) GenerateBuildActions(ctx android.SingletonCont
 
 		// Common properties among snapshots.
 		prop.ModuleName = ctx.ModuleName(m)
-		prop.RelativeInstallPath = m.RelativeInstallPath()
+		if m.isVndkExt() {
+			// vndk exts are installed to /vendor/lib(64)?/vndk(-sp)?
+			if m.isVndkSp() {
+				prop.RelativeInstallPath = "vndk-sp"
+			} else {
+				prop.RelativeInstallPath = "vndk"
+			}
+		} else {
+			prop.RelativeInstallPath = m.RelativeInstallPath()
+		}
 		prop.RuntimeLibs = m.Properties.SnapshotRuntimeLibs
 		prop.Required = m.RequiredModuleNames()
 		for _, path := range m.InitRc() {
