@@ -1272,6 +1272,7 @@ type apexFile struct {
 	hostRequiredModuleNames   []string
 
 	jacocoReportClassesFile android.Path     // only for javalibs and apps
+	lintDepSets             java.LintDepSets // only for javalibs and apps
 	certificate             java.Certificate // only for apps
 	overriddenPackageName   string           // only for apps
 }
@@ -1394,6 +1395,9 @@ type apexBundle struct {
 
 	// Struct holding the merged notice file paths in different formats
 	mergedNotices android.NoticeOutputs
+
+	// Optional list of lint report zip files for apexes that contain java or app modules
+	lintReports android.Paths
 }
 
 func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext,
@@ -1756,8 +1760,16 @@ func apexFileForShBinary(ctx android.BaseModuleContext, sh *sh.ShBinary) apexFil
 type javaDependency interface {
 	DexJar() android.Path
 	JacocoReportClassesFile() android.Path
+	LintDepSets() java.LintDepSets
+
 	Stem() string
 }
+
+var _ javaDependency = (*java.Library)(nil)
+var _ javaDependency = (*java.Import)(nil)
+var _ javaDependency = (*java.SdkLibrary)(nil)
+var _ javaDependency = (*java.DexImport)(nil)
+var _ javaDependency = (*java.SdkLibraryImport)(nil)
 
 func apexFileForJavaLibrary(ctx android.BaseModuleContext, lib javaDependency, module android.Module) apexFile {
 	dirInApex := "javalib"
@@ -1766,6 +1778,7 @@ func apexFileForJavaLibrary(ctx android.BaseModuleContext, lib javaDependency, m
 	name := strings.TrimPrefix(module.Name(), "prebuilt_")
 	af := newApexFile(ctx, fileToCopy, name, dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = lib.JacocoReportClassesFile()
+	af.lintDepSets = lib.LintDepSets()
 	af.stem = lib.Stem() + ".jar"
 	return af
 }
@@ -2043,7 +2056,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				}
 			case javaLibTag:
 				switch child.(type) {
-				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport:
+				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport, *java.Import:
 					af := apexFileForJavaLibrary(ctx, child.(javaDependency), child.(android.Module))
 					if !af.Ok() {
 						ctx.PropertyErrorf("java_libs", "%q is not configured to be compiled into dex", depName)
@@ -2281,6 +2294,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.compatSymlinks = makeCompatSymlinks(a.BaseModuleName(), ctx)
 
 	a.buildApexDependencyInfo(ctx)
+
+	a.buildLintReports(ctx)
 }
 
 // Enforce that Java deps of the apex are using stable SDKs to compile

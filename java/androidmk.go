@@ -132,9 +132,7 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 					}
 					entries.SetString("LOCAL_MODULE_STEM", library.Stem())
 
-					entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", library.linter.outputs.transitiveHTMLZip)
-					entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", library.linter.outputs.transitiveTextZip)
-					entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", library.linter.outputs.transitiveXMLZip)
+					entries.SetOptionalPaths("LOCAL_SOONG_LINT_REPORTS", library.linter.reports)
 				},
 			},
 		}
@@ -196,6 +194,9 @@ func (prebuilt *Import) AndroidMkEntries() []android.AndroidMkEntries {
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(entries *android.AndroidMkEntries) {
 				entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", !Bool(prebuilt.properties.Installable))
+				if prebuilt.dexJarFile != nil {
+					entries.SetPath("LOCAL_SOONG_DEX_JAR", prebuilt.dexJarFile)
+				}
 				entries.SetPath("LOCAL_SOONG_HEADER_JAR", prebuilt.combinedClasspathFile)
 				entries.SetPath("LOCAL_SOONG_CLASSES_JAR", prebuilt.combinedClasspathFile)
 				entries.SetString("LOCAL_SDK_VERSION", prebuilt.makeSdkVersion())
@@ -394,9 +395,7 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.AddStrings("LOCAL_SOONG_BUILT_INSTALLED", extra.String()+":"+install)
 				}
 
-				entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", app.linter.outputs.transitiveHTMLZip)
-				entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", app.linter.outputs.transitiveTextZip)
-				entries.AddOptionalPath("LOCAL_SOONG_LINT_REPORTS", app.linter.outputs.transitiveXMLZip)
+				entries.SetOptionalPaths("LOCAL_SOONG_LINT_REPORTS", app.linter.reports)
 			},
 		},
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{

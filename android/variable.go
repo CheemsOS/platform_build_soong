@@ -191,6 +191,8 @@ type productVariables struct {
 	DeviceVndkVersion       *string  `json:",omitempty"`
 	DeviceSystemSdkVersions []string `json:",omitempty"`
 
+	RecoverySnapshotVersion *string `json:",omitempty"`
+
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`
@@ -372,6 +374,8 @@ type productVariables struct {
 	InstallExtraFlattenedApexes *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
+
+	PrebuiltHiddenApiDir *string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
