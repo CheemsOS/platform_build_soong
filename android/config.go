@@ -999,6 +999,10 @@ func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
+func (c *deviceConfig) RamdiskSnapshotVersion() string {
+	return String(c.config.productVariables.RamdiskSnapshotVersion)
+}
+
 func (c *deviceConfig) PlatformVndkVersion() string {
 	return String(c.config.productVariables.Platform_vndk_version)
 }
@@ -1305,4 +1309,28 @@ func (c *deviceConfig) DeviceSecondaryArchVariant() string {
 
 func (c *deviceConfig) BoardUsesRecoveryAsBoot() bool {
 	return Bool(c.config.productVariables.BoardUsesRecoveryAsBoot)
+}
+
+func (c *deviceConfig) DirectedVendorSnapshot() bool {
+	return c.config.productVariables.DirectedVendorSnapshot
+}
+
+func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
+	return c.config.productVariables.VendorSnapshotModules
+}
+
+func (c *deviceConfig) DirectedRecoverySnapshot() bool {
+	return c.config.productVariables.DirectedRecoverySnapshot
+}
+
+func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
+	return c.config.productVariables.RecoverySnapshotModules
+}
+
+func (c *deviceConfig) DirectedRamdiskSnapshot() bool {
+	return c.config.productVariables.DirectedRamdiskSnapshot
+}
+
+func (c *deviceConfig) RamdiskSnapshotModules() map[string]bool {
+	return c.config.productVariables.RamdiskSnapshotModules
 }

@@ -16,6 +16,7 @@ package cc
 
 import (
 	"android/soong/android"
+	"android/soong/genrule"
 )
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
@@ -32,6 +33,7 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_object", ObjectFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_shared_stl", NdkPrebuiltSharedStlFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_object", NdkPrebuiltObjectFactory)
+	ctx.RegisterModuleType("genrule", genrule.GenRuleFactory)
 }
 
 func GatherRequiredDepsForTest(oses ...android.OsType) string {
@@ -471,6 +473,7 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-fake-snapshot", VendorFakeSnapshotSingleton)
 	ctx.RegisterSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
+	ctx.RegisterSingletonType("ramdisk-snapshot", RamdiskSnapshotSingleton)
 
 	return ctx
 }
